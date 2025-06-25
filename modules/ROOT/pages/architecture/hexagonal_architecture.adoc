@@ -1,56 +1,107 @@
 :imagesdir: ../images
 = Hexagonal Architecture
 
-Hexagonal architecture, also known as Ports and Adapters, is a software design pattern that promotes separation of concerns by organizing an application into a central core surrounded by external adapters. 
-The core contains the business logic and communicates with the external world via well-defined ports (interfaces). 
-Adapters implement these ports and handle the translation between the core's domain model and the specific technologies or protocols used by external systems.
+In many software systems, core business logic is entangled with technical concerns like persistence, messaging, and protocol handling. This coupling makes systems fragile, difficult to adapt, and hard to test.
 
-[[img-t-hexagonal-architecture]]
-.Hexagonal Architecture Reference
-image::hexagonal_component_architecture_overview.drawio.svg["devonfw hexagonal architecture blueprint",scaledwidth="80%",align="center"]
+.Infrastructural Entanglement
+image::hexagonal_architecture_motivation.svg[align="center"]
+
+As illustrated in Figure 1 (_Infrastructural Entanglement_), application logic is directly tied to external systems — databases, user interfaces, messaging infrastructure — via concrete implementations throughout the application. Domain models are aware of their environment and dependencies are pervasive: HTTP controllers call service methods that operate on ORM-managed entities; repositories return framework-specific types; and cross-cutting concerns such as error handling, logging, and authentication are scattered throughout the codebase.
+
+This tight coupling leads to several recurring challenges:
+
+- *Hard to adapt:* Infrastructure changes (e.g., migrating from a relational database to NoSQL, or shifting from REST to asynchronous messaging) require invasive changes to business logic, even if functional requirements stay the same.
+- *Difficult to test:* Business logic is hard to isolate for unit testing due to deep technical dependencies. Tests either require real external systems or rely on brittle mocking setups.
+- *Blurred concerns:* Business logic is mixed with infrastructure logic — transaction management, logging, exception mapping — making it harder to understand, modify, or reuse.
+
+While traditional layered architectures (e.g., presentation → service → persistence) attempt to organize these concerns, they often still expose the domain layer to infrastructure details. In contrast, hexagonal architecture addresses these challenges through more structural response that utilizes the dependency inversion principle.
+
+== Hexagonal Blueprint
+
+Hexagonal Architecture — also known as the _Ports and Adapters_ pattern — is an architectural style that centers the domain model, surrounded by abstract interfaces to the outside world. These interfaces, called *ports*, act like sockets through which external components interact with the core. Concrete implementations — known as *adapters* — connect to these ports and handle the specifics of communication, persistence, or protocol integration.
+
+This design follows the *Dependency Inversion Principle*: the domain depends only on abstractions, not specific technologies. It neither knows nor cares what framework, database, or transport mechanism is in use — only that the contractual behavior of the port is respected.
+
+Adapter wiring is delegated to the runtime environment, often via a dependency injection framework such as Spring or Quarkus. This allows the core to remain agnostic of instantiation logic and independent of its execution environment.
+
+.Hexagonal Architecture in Design
+image::hexagonal_architecture_idea.svg[align="center"]
+
+The resulting structure is shown in Figure 2 (_Hexagonal Architecture in Design_): the business logic resides at the core, surrounded by inbound and outbound ports. Adapters implement these ports and handle concerns such as user input, persistence, messaging, or observability — without leaking into the domain layer.
+
+== Practical Example
+
+To make this structure concrete, consider a system where two application use cases — reservation and batch processing — form the core of the business logic.
+
+.Hexagonal Architecture in Practice
+image::hexagonal_architecture_example.svg[align="center"]
+
+This setup is shown in Figure 3 (_Hexagonal Architecture in Practice_). Both use cases are implemented inside the core and exposed through dedicated interfaces: `ReservationPort` and `BatchPort`. These interfaces form the system’s inbound ports — stable, technology-agnostic entry points into the domain.
+
+External inputs are handled by inbound adapters. A `RestController` invokes `ReservationPort` to process HTTP requests. The `GrpcAdapter` implements `BatchPort`, allowing background tasks or other systems to initiate batch processing via gRPC. These adapters translate protocols and delegate to the core without introducing infrastructure-specific concerns into the domain.
+
+The domain, in turn, depends on two outbound ports: `PersistencePort` and `PaymentPort`. These define how the domain interacts with data stores and external services. Their implementations — `JpaAdapter` and `SoapAdapter`, respectively — encapsulate technical details such as database access or remote service communication.
+
+Because the core depends only on ports, it stays isolated from the specifics of HTTP, gRPC, JPA, or SOAP. Replacing an adapter — for example, swapping SOAP for a REST-based payment gateway — does not require any changes to the domain layer. This separation keeps infrastructure decisions localized and reversible while ensuring that the core remains stable and testable.
+
+== Dependency Direction and Data Ownership
+
+Hexagonal Architecture enforces a strict rule: dependencies point inward. Adapters may depend on the domain, but the domain must not depend on adapter code — not even indirectly through return types. This constraint has important implications for how data flows across layers.
+
+.Zooming into the Persistence Port
+image::hexagonal_architecture_data_direction.svg[align="center"]
+
+This is illustrated in Figure 4 (_Zooming into the Persistence Port_). For example, when the domain calls `PersistencePort` and expects a return value, the adapter must ensure that no infrastructure-specific types leak into the core. Returning a `ReservationEntity` — a JPA class defined in the adapter — would violate this rule by making the domain aware of persistence details.
+
+There are two primary strategies to preserve the direction of dependency:
+
+- *Explicit Mapping Inside the Adapter:*
+The adapter maps domain objects to persistence entities for storage, and maps them back before returning results. This approach keeps the domain clean and separate, though it requires boilerplate mapping logic.
+
+- *Domain Interfaces Implemented by the Adapter:*
+Alternatively, the domain model can be defined as interfaces (e.g. `Reservation`). The adapter implements these interfaces in its entity classes. This allows the adapter to return its own types while keeping the domain dependent only on abstractions.
+
+Each strategy has trade-offs. Mapping provides clear boundaries and flexibility but increases code volume. Interface-based design reduces duplication but may blur the separation between layers. The choice depends on the complexity of the domain and how much semantic weight the model carries.
+
+Regardless of approach, the architectural constraint holds: data flows inward, and dependencies never reverse. The domain defines what it needs; the adapter provides it — without exposing implementation details or violating the system’s structural integrity.
+
+=== Package Structure
+The following table shows a package structure that fits the hexagonal design and focuses on the reservation use case of the application:
 // ----
 //Created the directory tree based on this list using https://tree.nathanfriend.io/
 // As the list is easier to maintain, try to do edits in the list structure, use the tool mentioned above and paste both in here:
 
-// - application
-//   - core
-//     - domain
-//       - Customer.java
-//       - CustomerFactory.java
-//       - Reservation.java
-//       - Table.java
-//     - ports
-//       - in
-//         - AddReservationPort.java
-//         - CancelReservationPort.java
-//         - AlterReservationPort.java
-//         - AddTablePort.java
-//         - RemoveTablePort.java
-//       - out
-//         - StoreReservationPort.java
-//     - usecase
-//       - AddReservationUc.java
-//       - ManageReservationUc.java
-//       - AddTableUc.java
-//     - [service]
-//       - [FindFreeTableService.java]
-//   - adapter
-//     - in
-//       - web
-//         - RestController.java
-//         - model
-//          - ReservationDto.java
-//        - mapper
-//          - ReservationMapper.java
-//     - out
-//       - repository
-//         - JpaAdapter.java
-//         - model
-//           - ReservationEntity.java
-//           - TableEntity.java
-//         - mapper
-//           - ReservationJpaMapper.java
-//           - TableJpaMapper.java
+// application
+//   core
+//     domain
+//       Reservation.java
+//     ports
+//       in
+//         ReservationPort.java
+//       out
+//         PersistencePort.java
+//     usecase
+//       AddReservationUseCase.java
+//       CancelReservationUseCase.java
+//       PostponeReservationUseCase.java
+//     service
+//       ReservationService.java
+//   adapter
+//     in
+//       web
+//         RestController.java
+//         model
+//           ReservationDto.java
+//         mapper
+//           ReservationMapper.java
+//     out
+//       persistence
+//         JpaAdapter.java
+//         model
+//           ReservationEntity.java
+//         logic
+//           ReservationRepository.java
+//           ReservationMapper.java
 // ----
 
 [source,plaintext]
@@ -59,25 +110,18 @@ image::hexagonal_component_architecture_overview.drawio.svg["devonfw hexagonal a
 └── application/
     ├── core/
     │   ├── domain/
-    │   │   ├── Customer.java
-    │   │   ├── CustomerFactory.java
-    │   │   ├── Reservation.java
-    │   │   └── Table.java
+    │   │   └── Reservation.java
     │   ├── ports/
     │   │   ├── in/
-    │   │   │   ├── AddReservationPort.java
-    │   │   │   ├── CancelReservationPort.java
-    │   │   │   ├── AlterReservationPort.java
-    │   │   │   ├── AddTablePort.java
-    │   │   │   └── RemoveTablePort.java
+    │   │   │   └── ReservationPort.java
     │   │   └── out/
-    │   │       └── StoreReservationPort.java
+    │   │       └── PersistencePort.java
     │   ├── usecase/
-    │   │   ├── AddReservationUc.java
-    │   │   ├── ManageReservationUc.java
-    │   │   └── AddTableUc.java
-    │   └── [service]/
-    │       └── [FindFreeTableService.java]
+    │   │   ├── AddReservationUseCase.java
+    │   │   ├── CancelReservationUseCase.java
+    │   │   └── PostponeReservationUseCase.java
+    │   └── service/
+    │       └── ReservationService.java
     └── adapter/
         ├── in/
         │   └── web/
@@ -87,14 +131,13 @@ image::hexagonal_component_architecture_overview.drawio.svg["devonfw hexagonal a
         │       └── mapper/
         │           └── ReservationMapper.java
         └── out/
-            └── repository/
+            └── persistence/
                 ├── JpaAdapter.java
                 ├── model/
-                │   ├── ReservationEntity.java
-                │   └── TableEntity.java
-                └── mapper/
-                    ├── ReservationJpaMapper.java
-                    └── TableJpaMapper.java
+                │   └── ReservationEntity.java
+                └── logic/
+                    ├── ReservationRepository.java
+                    └── ReservationMapper.java
 ----
 [cols="20,~", options="header"]
 |===
@@ -104,37 +147,37 @@ image::hexagonal_component_architecture_overview.drawio.svg["devonfw hexagonal a
 | The core contains the essential business logic, domain entities, and use cases. It focuses on implementing the main functionalities while remaining technology-agnostic. The core interacts with external components through well-defined interfaces called "ports," ensuring a clear separation of concerns and promoting flexibility, testability, and maintainability.
 
 | core.domain
-| The domain package contains the entities and value objects of the business domain of the application. 
-Related Factories or Builders are located here as well. 
+| The domain package contains the entities and value objects of the business domain of the application.
+Related Factories or Builders are located here as well.
 It's proposed to make entities anemic. See <<_anemic_vs_rich_domain_models>>
 
 | core.usecase
-| Use Cases are the main entrypoint of the applications core. 
-They validate the given input and orchestrate the domain entities, services and ports to implement a Business Use Case. 
-Usually a use case implementation should only include a small dedicated use case. 
+| Use Cases are the main entrypoint of the applications core.
+They validate the given input and orchestrate the domain entities, services and ports to implement a Business Use Case.
+Usually a use case implementation should only include a small dedicated use case.
 Depending of the size and adjacency of the use cases a grouping might make sense (e.g. ManageTableUc)
 
 | core.port
-| Ports are interfaces, that are used by the core and should be implemented by an according adapter. 
-Ports should not be technology specific. 
-One big advantage of the hexagonal architecture is, that the adapters can be changed without changing the core and therefore, without touching the business logic. 
+| Ports are interfaces, that are used by the core and should be implemented by an according adapter.
+Ports should not be technology specific.
+One big advantage of the hexagonal architecture is, that the adapters can be changed without changing the core and therefore, without touching the business logic.
 It needs to be distinguished between incoming ports and outgoing ports.
 
 | core.port.in
 a| Incoming ports are the entry of the application.
-They provide interfaces that are called from incoming adapters and hide the actual implementation. 
-A proposal of structuring incoming ports is naming them like single use cases (e.g. CancelReservationPort). 
+They provide interfaces that are called from incoming adapters and hide the actual implementation.
+A proposal of structuring incoming ports is naming them like single use cases (e.g. CancelReservationPort).
 Each port should only provide a single method.
 
 .Design Decision
 [%collapsible]
 ====
 Incoming Ports are not as relevant for the hexagonal architecture as the outgoing ports.
-Outgoing ports are used for the dependency inversion pattern. 
-For incoming ports could also call the use cases directly. 
+Outgoing ports are used for the dependency inversion pattern.
+For incoming ports could also call the use cases directly.
 Therefore, an pragmatic alternative would be leaving out the incoming ports.
 
-It was decided to include the incoming ports nonetheless. They should implement single use cases that are offered. 
+It was decided to include the incoming ports nonetheless. They should implement single use cases that are offered.
 Each interface should clearly mark the use case that contains only one method.
 Use cases from the interface might be grouped logically in the use case implementation class.
 ====
@@ -142,16 +185,16 @@ Use cases from the interface might be grouped logically in the use case implemen
 | core.port.out
 | Outgoing ports are an abstraction of everything in the surrounding context that is actively triggered by the core or used as data sink.
 This might include other services that are called, files that are written, databases, event streaming and everything the application is actively triggering outside of the core.
-Outgoing ports should describe the business need for the communication (e.g. StoreReservationPort). How this is then realized depends on the adapter that implements it. 
-This way a technology can be easily replaced. 
-For example storing the reservation could be be realized in a first prototype by writing the objects to a file. 
+Outgoing ports should describe the business need for the communication (e.g. StoreReservationPort). How this is then realized depends on the adapter that implements it.
+This way a technology can be easily replaced.
+For example storing the reservation could be be realized in a first prototype by writing the objects to a file.
 Later it could be replaced with a database.
 The core logic would be untouched by that.
 
 | [optional] core.service
-| Services can be considered as business helper classes. 
+| Services can be considered as business helper classes.
 They provide a reusable part of the applications business logic that is used by multiple use cases or that helps to structure the application in a logical way.
-Services are optional as they can be used, when there's a real need. 
+Services are optional as they can be used, when there's a real need.
 Usually a use case should contain the business logic.
 
 | adapter
@@ -164,12 +207,12 @@ a| Adapters connect the application core to the surrounding context. They have t
 * Log the interaction with the surrounding context
 
 | adapter.in
-| Incoming adapters specify connection points for everything that can trigger the business logic. 
+| Incoming adapters specify connection points for everything that can trigger the business logic.
 That might be interfaces (HTML, RPC, etc), Message Consumers or schedulers for batch processing.
-Inside the adapters further packages are differentiating the category of the adapter (e.g. `.web`). 
+Inside the adapters further packages are differentiating the category of the adapter (e.g. `.web`).
 
 | adapter.out
-| Outgoing adapters define outgoing connections where the application actively interacts with context outside. 
+| Outgoing adapters define outgoing connections where the application actively interacts with context outside.
 That can be database connections, file operations, API calls, message producing and many more.
 Inside the adapters further packages are differentiating the category of the adapter (e.g. `.repository`).
 |===
@@ -188,10 +231,10 @@ Considering java as an object oriented language it feels natural to implement bu
 In large scale application we propose to not use rich domain models.
 There are two reasons for this:
 
-. the domain objects are returned to the adapters. 
+. the domain objects are returned to the adapters.
 If they include business logic this is revealed and available outside of the core, which should not be the case.
 The answer to this problem could be an additional mapping, but this leads to a lot of unpractical mappings.
-. adding the business logic to the domain entities spreads it across use cases, entities and services. 
+. adding the business logic to the domain entities spreads it across use cases, entities and services.
 This makes the application more difficult to understand and harder to locate the place for new features or changes.
 
 Therefore, we propose to implement the domain model as anemic entities and make usage of use cases and services to implement the business logic and interact with the domain models.
